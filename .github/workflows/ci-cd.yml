@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: CI Pipeline
 
 on:
   push:
@@ -6,34 +6,39 @@ on:
       - main
       - dev
 
-env:
-  AWS_REGION: us-east-1
-  ECR_REPO: ci-cd-repository
-  DOCKERHUB_REPO: devopsship/ci-cd-project
-  SONAR_HOST_URL: http://13.123.45.67:9000  # Replace with actual SonarQube server IP
-  SONAR_PROJECT_KEY: ci-cd-project
-
 jobs:
-  ci:
-    name: Continuous Integration
+  build-and-scan:
     runs-on: ubuntu-latest
 
+    env:
+      AWS_REGION: us-east-1
+      ECR_REPO: ci-cd-repository
+      DOCKERHUB_REPO: devopsship/ci-cd-project
+      SONAR_HOST_URL: http://13.123.45.67:9000  # Replace with actual SonarQube server
+      SONAR_PROJECT_KEY: ci-cd-project
+
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Install Required Software
         run: |
           sudo apt update -y
-          sudo apt install -y awscli wget unzip nodejs npm
+          sudo apt install -y wget unzip nodejs npm
           
+          # Install AWS CLI
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+          aws --version
+
           # Install Sonar Scanner
           wget -O sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
           unzip sonar-scanner.zip
           sudo mv sonar-scanner-*/ /opt/sonar-scanner
           echo 'export PATH=$PATH:/opt/sonar-scanner/bin' >> ~/.bashrc
           source ~/.bashrc
-          
+
           # Install Trivy
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -cs) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
@@ -46,55 +51,46 @@ jobs:
           npm -v
           trivy --version
 
-      - name: SonarQube Scan
-        env:
-          SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+      - name: Run SonarQube Analysis
         run: |
           sonar-scanner \
-            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
-            -Dsonar.sources=. \
             -Dsonar.host.url=${{ env.SONAR_HOST_URL }} \
-            -Dsonar.login=${{ secrets.SONARQUBE_TOKEN }}
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
 
-      - name: Install Dependencies & Build
+      - name: Run NPM Build
         run: |
           npm install
           npm run build
 
       - name: Run Trivy Security Scan
         run: |
-          trivy filesystem --severity HIGH,CRITICAL .
+          trivy fs --severity HIGH,CRITICAL .
 
-      - name: Login to Docker Hub
-        run: echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -u "devopsship" --password-stdin
-
-      - name: Build and Push Docker Image to Docker Hub
+      - name: Build Docker Image
         run: |
           docker build -t ${{ env.DOCKERHUB_REPO }}:latest .
+
+      - name: Log in to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Push Docker Image to Docker Hub
+        run: |
           docker push ${{ env.DOCKERHUB_REPO }}:latest
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to AWS ECR
+      - name: Log in to Amazon ECR
         run: |
-          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin your-account-id.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin <aws_account_id>.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
 
-      - name: Build and Push Docker Image to ECR
+      - name: Push Docker Image to AWS ECR
         run: |
-          docker tag ${{ env.DOCKERHUB_REPO }}:latest your-account-id.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:latest
-          docker push your-account-id.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:latest
-
-  cd:
-    name: Continuous Deployment
-    needs: ci
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Deploy to Amazon ECS
-        run: |
-          aws ecs update-service --cluster ci-cd-ecs-cluster --service ci-cd-service --force-new-deployment
+          docker tag ${{ env.DOCKERHUB_REPO }}:latest <aws_account_id>.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:latest
+          docker push <aws_account_id>.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:latest
