@@ -1,0 +1,76 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPO: ci-cd-repository
+  DOCKERHUB_REPO: your-dockerhub-username/ci-cd-project
+  SONAR_HOST_URL: http://your-sonarqube-server-ip:9000
+  SONAR_PROJECT_KEY: ci-cd-project
+
+jobs:
+  ci:
+    name: Continuous Integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: SonarQube Scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+        run: |
+          sonar-scanner \
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
+            -Dsonar.sources=. \
+            -Dsonar.host.url=${{ env.SONAR_HOST_URL }} \
+            -Dsonar.login=${{ secrets.SONARQUBE_TOKEN }}
+
+      - name: Install Dependencies & Build
+        run: |
+          npm install
+          npm run build
+
+      - name: Run Trivy Security Scan
+        run: |
+          docker run --rm -v $PWD:/app aquasec/trivy fs /app --exit-code 1 --severity HIGH,CRITICAL
+
+      - name: Login to Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build and Push Docker Image to Docker Hub
+        run: |
+          docker build -t ${{ env.DOCKERHUB_REPO }}:latest .
+          docker push ${{ env.DOCKERHUB_REPO }}:latest
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to AWS ECR
+        run: |
+          aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin your-account-id.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+      - name: Build and Push Docker Image to ECR
+        run: |
+          docker tag ${{ env.DOCKERHUB_REPO }}:latest your-account-id.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:latest
+          docker push your-account-id.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:latest
+
+  cd:
+    name: Continuous Deployment
+    needs: ci
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to Amazon ECS
+        run: |
+          aws ecs update-service --cluster ci-cd-ecs-cluster --service ci-cd-service --force-new-deployment
