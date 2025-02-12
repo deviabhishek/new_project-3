@@ -14,8 +14,6 @@ jobs:
       AWS_REGION: us-east-1
       ECR_REPO: ci-cd-repository
       DOCKERHUB_REPO: devopsship/ci-cd-project
-      SONAR_HOST_URL: http://13.123.45.67:9000  # Replace with actual SonarQube server
-      SONAR_PROJECT_KEY: ci-cd-project
 
     steps:
       - name: Checkout Repository
@@ -37,13 +35,6 @@ jobs:
           fi
           aws --version
 
-          # Install Sonar Scanner
-          wget -O sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip
-          unzip sonar-scanner.zip
-          sudo mv sonar-scanner-*/ /opt/sonar-scanner
-          echo 'export PATH=$PATH:/opt/sonar-scanner/bin' >> ~/.bashrc
-          source ~/.bashrc
-
           # Install Trivy
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -cs) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
@@ -51,17 +42,9 @@ jobs:
 
           # Verify Installations
           aws --version
-          sonar-scanner --version
           node -v
           npm -v
           trivy --version
-
-      - name: Run SonarQube Analysis
-        run: |
-          sonar-scanner \
-            -Dsonar.host.url=${{ env.SONAR_HOST_URL }} \
-            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
 
       - name: Run NPM Build
         run: |
@@ -103,7 +86,7 @@ jobs:
       - name: Cleanup Unused Files & Docker Resources
         run: |
           echo "Cleaning up temporary files..."
-          rm -rf awscliv2.zip sonar-scanner.zip sonar-scanner-*
+          rm -rf awscliv2.zip
 
           echo "Removing unused Docker images..."
           docker system prune -af
